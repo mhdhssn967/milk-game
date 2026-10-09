@@ -10,9 +10,12 @@ export default function App() {
   const engRef = useRef(null)
   
   const [appState, setAppState] = useState('menu') // 'menu', 'lobby', 'game'
+  const [modalState, setModalState] = useState('none')
   const [roomId, setRoomId] = useState('')
   const [joinInput, setJoinInput] = useState('')
+  const [playerName, setPlayerName] = useState('')
   const [players, setPlayers] = useState([])
+  const [playerNames, setPlayerNames] = useState({})
   const [myId, setMyId] = useState('')
   const [isHost, setIsHost] = useState(false)
   const [turnIndex, setTurnIndex] = useState(0)
@@ -43,8 +46,15 @@ export default function App() {
       setErrorMsg('')
     })
 
-    socket.on('milkPlayersUpdate', (plrs) => {
-      setPlayers(plrs)
+    socket.on('milkPlayersUpdate', (data) => {
+      if (Array.isArray(data)) {
+        // Fallback for old server payload
+        setPlayers(data)
+        setPlayerNames({})
+      } else {
+        setPlayers(data?.players || [])
+        setPlayerNames(data?.names || {})
+      }
     })
 
     socket.on('milkError', (msg) => {
@@ -85,6 +95,7 @@ export default function App() {
 
   // Use refs for state accessed inside engine callback
   const stateRef = useRef({ players, turnIndex, myId, roomId })
+  const didMyTurnRef = useRef(false)
   useEffect(() => {
     stateRef.current = { players, turnIndex, myId, roomId }
   }, [players, turnIndex, myId, roomId])
@@ -99,7 +110,8 @@ export default function App() {
       if (ev.type === 'end') {
         setBusy(false)
         const s = stateRef.current
-        if (s.players[s.turnIndex] === s.myId) {
+        if (s.players[s.turnIndex] === s.myId && didMyTurnRef.current) {
+          didMyTurnRef.current = false
           socket.emit('milkTurnEnded', { roomId: s.roomId, spilled: ev.spilled })
         }
       }
@@ -112,9 +124,9 @@ export default function App() {
     }
   }, [appState])
 
-  const createRoom = () => socket.emit('milkCreateRoom')
+  const createRoom = () => socket.emit('milkCreateRoom', playerName)
   const joinRoom = () => {
-    if (joinInput.length === 5) socket.emit('milkJoinRoom', joinInput)
+    if (joinInput.length === 5) socket.emit('milkJoinRoom', { roomId: joinInput, name: playerName })
   }
   const startGame = () => socket.emit('milkStartGame', roomId)
 
@@ -123,6 +135,7 @@ export default function App() {
   const press = () => {
     if (loser !== null || !isMyTurn()) return
     if (engRef.current?.startSqueeze()) {
+      didMyTurnRef.current = true
       socket.emit('milkAction', { roomId, action: 'startSqueeze' })
     }
   }
@@ -163,11 +176,36 @@ export default function App() {
     return (
       <div className="menu-screen" style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:'20px',color:'white',background:'transparent'}}>
         <h1 style={{fontSize:'4rem', flex:'none', marginBottom:'40px', lineHeight:'1.1'}}>Don't Spill<br/>the Milk!</h1>
-        <button onClick={createRoom} style={{padding:'15px 30px',fontSize:'1.5rem',borderRadius:'16px',background:'#ff6b6b',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #c44545'}}>Create Room</button>
-        <div style={{display:'flex',gap:'10px',marginTop:'30px',alignItems:'center'}}>
-          <input value={joinInput} onChange={e=>setJoinInput(e.target.value)} placeholder="5-digit code" maxLength={5} style={{padding:'15px',fontSize:'1.2rem',borderRadius:'12px',border:'none',textAlign:'center',width:'160px',color:'#3b1d25',fontWeight:'bold'}} />
-          <button onClick={joinRoom} style={{padding:'15px 25px',fontSize:'1.2rem',borderRadius:'12px',background:'#a9703d',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #6d4224'}}>Join Room</button>
-        </div>
+        
+        {modalState === 'none' && (
+          <div style={{display:'flex', flexDirection:'column', gap: '20px', width: '240px'}}>
+            <button onClick={() => setModalState('create_name')} style={{padding:'15px',fontSize:'1.5rem',borderRadius:'16px',background:'#ff6b6b',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #c44545', width: '100%'}}>Create Room</button>
+            <button onClick={() => setModalState('join_name')} style={{padding:'15px',fontSize:'1.5rem',borderRadius:'16px',background:'#a9703d',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #6d4224', width: '100%'}}>Join Room</button>
+          </div>
+        )}
+
+        {(modalState === 'create_name' || modalState === 'join_name') && (
+          <div style={{display:'flex', flexDirection:'column', gap: '15px', alignItems:'center'}}>
+            <h2 style={{margin:0}}>Enter your name</h2>
+            <input value={playerName} onChange={e=>setPlayerName(e.target.value)} placeholder="Your Name" style={{padding:'15px',fontSize:'1.2rem',borderRadius:'12px',border:'none',textAlign:'center',width:'240px',color:'#3b1d25',fontWeight:'bold'}} />
+            <div style={{display:'flex', gap:'10px', width:'240px'}}>
+               <button onClick={() => {setModalState('none'); setErrorMsg('')}} style={{flex:1, padding:'12px 10px',fontSize:'1.1rem',borderRadius:'12px',background:'#665',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #443'}}>Back</button>
+               <button onClick={() => modalState === 'create_name' ? createRoom() : setModalState('join_code')} disabled={!playerName} style={{flex:1, padding:'12px 10px',fontSize:'1.1rem',borderRadius:'12px',background:'#ff6b6b',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #c44545'}}>Next</button>
+            </div>
+          </div>
+        )}
+
+        {modalState === 'join_code' && (
+          <div style={{display:'flex', flexDirection:'column', gap: '15px', alignItems:'center'}}>
+            <h2 style={{margin:0}}>Enter room code</h2>
+            <input value={joinInput} onChange={e=>setJoinInput(e.target.value)} placeholder="5-DIGIT CODE" maxLength={5} style={{padding:'15px',fontSize:'1.2rem',borderRadius:'12px',border:'none',textAlign:'center',width:'240px',color:'#3b1d25',fontWeight:'bold'}} />
+            <div style={{display:'flex', gap:'10px', width:'240px'}}>
+               <button onClick={() => {setModalState('join_name'); setErrorMsg('')}} style={{flex:1, padding:'12px 10px',fontSize:'1.1rem',borderRadius:'12px',background:'#665',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #443'}}>Back</button>
+               <button onClick={joinRoom} disabled={joinInput.length !== 5} style={{flex:1, padding:'12px 10px',fontSize:'1.1rem',borderRadius:'12px',background:'#a9703d',border:'none',color:'white',cursor:'pointer',boxShadow:'0 4px 0 #6d4224'}}>Join</button>
+            </div>
+          </div>
+        )}
+
         {errorMsg && <div style={{color:'#ff6b6b',marginTop:'20px',fontSize:'1.2rem',fontWeight:'bold',background:'rgba(255,0,0,0.2)',padding:'10px',borderRadius:'8px'}}>{errorMsg}</div>}
       </div>
     )
@@ -179,9 +217,9 @@ export default function App() {
         <h2 style={{fontSize:'2rem'}}>Room Code: <span style={{color:'#ffb3c6',letterSpacing:'3px'}}>{roomId}</span></h2>
         <h3>Players ({players.length}/5)</h3>
         <ul style={{listStyle:'none',padding:0,display:'flex',flexDirection:'column',gap:'10px',fontSize:'1.2rem'}}>
-          {players.map((p, i) => (
+          {players.map((p) => (
             <li key={p} style={{background:'rgba(255,255,255,0.1)',padding:'10px 20px',borderRadius:'8px'}}>
-              Player {i + 1} {p === myId ? '(You)' : ''}
+              {playerNames[p]} {p === myId ? '(You)' : ''}
             </li>
           ))}
         </ul>
@@ -204,7 +242,7 @@ export default function App() {
         const isMe = p === myId
         return (
           <div key={p} style={{padding:'8px 12px',background:isLoser?'#ff4444':isTurn?'#ff6b6b':'rgba(255,255,255,0.1)',borderRadius:'8px',color:'white',border:isMe?'2px solid white':'2px solid transparent',opacity:loser!==null&&!isLoser?0.5:1}}>
-            Player {i + 1} {isMe?'(You)':''}
+            {playerNames[p]} {isMe?'(You)':''}
             {isTurn && loser === null && <div style={{fontSize:'0.8rem',marginTop:'4px'}}>{busy?'Milking...':'Current Turn'}</div>}
             {isLoser && <div style={{fontSize:'0.8rem',marginTop:'4px'}}>Spilled it!</div>}
           </div>
@@ -219,11 +257,11 @@ export default function App() {
       <div className="stage">
         <canvas ref={canvasRef} onContextMenu={e => e.preventDefault()} onPointerDown={onDown} onPointerMove={onMove} onPointerUp={onUp} onPointerLeave={onUp} onPointerCancel={onUp} />
         {loser === null && isMyTurn() && <div key={bannerKey} className="banner" style={{background:'#33ff57',color:'black'}}>Your turn!</div>}
-        {loser === null && !isMyTurn() && <div key={bannerKey} className="banner">Player {turnIndex + 1}'s turn</div>}
+        {loser === null && !isMyTurn() && <div key={bannerKey} className="banner">{playerNames[players[turnIndex]]}'s turn</div>}
         {loser !== null && (
           <div className="overlay">
             <div className="result">
-              <div className="big">?? Player {loser + 1} spilled the milk!</div>
+              <div className="big">💥 {playerNames[players[loser]]} spilled the milk!</div>
               {isHost ? <button onClick={startGame} style={{marginTop:'20px'}}>Play Again</button> : <div style={{marginTop:'20px'}}>Waiting for host...</div>}
             </div>
           </div>
